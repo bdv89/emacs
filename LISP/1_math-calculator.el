@@ -89,8 +89,13 @@
     (setq cleaned (replace-regexp-in-string "," "." cleaned))
     ;; Normaliser les opérateurs de multiplication
     (setq cleaned (replace-regexp-in-string "\\s-*\\([x×]\\)\\s-*" "*" cleaned))
-    ;; Gérer le cas "5*3" (sans espaces) pour calc-eval
-    (setq cleaned (replace-regexp-in-string "\\([0-9]\\)\\*\\([0-9]\\)" "\\1 * \\2" cleaned))
+    ;; Gérer le cas "5*3" ou "15*2" (sans espaces) pour calc-eval
+    ;; Supporte désormais les nombres entiers ou décimaux de plusieurs chiffres
+    (setq cleaned
+          (replace-regexp-in-string
+           "\\([0-9]+\\(?:\\.[0-9]*\\)?\\)\\*\\([0-9]+\\(?:\\.[0-9]*\\)?\\)"
+           "\\1 * \\2"
+           cleaned))
     ;; Nettoyer les espaces multiples
     (setq cleaned (replace-regexp-in-string "\\s-+" " " cleaned))
     (string-trim cleaned)))
