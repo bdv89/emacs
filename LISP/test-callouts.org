@@ -1,0 +1,66 @@
+#+TITLE: Test des Callouts Personnalisés
+
+* Exemples de Callouts
+
+**[NOTE]** Ceci est une note importante
+Cette note contient des informations utiles pour l'utilisateur.
+Elle peut contenir plusieurs lignes de contenu.
+Et même du code ou des exemples.
+
+**[WARNING]** Attention aux erreurs possibles
+Il faut faire attention à ce point particulier lors de l'utilisation.
+Les conséquences peuvent être graves si on ignore cet avertissement.
+
+**[TIP]** Conseil pratique
+Voici un conseil pour améliorer votre workflow.
+- Première astuce
+- Deuxième astuce  
+- Troisième astuce
+
+**[IMPORTANT]** Information cruciale
+Cette information est essentielle à retenir.
+Ne l'oubliez jamais dans vos projets.
+
+**[DANGER]** Zone dangereuse
+Évitez absolument cette action qui pourrait causer des problèmes.
+Cela pourrait endommager votre système.
+
+**[DIARY]** 2025-01-12 14:30:25
+Entrée de journal personnel avec timestamp automatique.
+Apparence de bloc noir avec texte blanc pour les pensées privées.
+
+* Test avec titres personnalisés
+
+**[NOTE]** Mon titre personnalisé pour une note
+Contenu de la note avec un titre personnalisé.
+
+**[WARNING]** Alerte de sécurité critique
+Message d'avertissement avec titre spécifique.
+
+**[TIP]** Astuce pour débutants
+Conseil adapté aux nouveaux utilisateurs.
+
+* Test de raccourcis
+
+Utilisez les raccourcis suivants :
+
+** Création de callouts
+- C-c o n : NOTE
+- C-c o w : WARNING  
+- C-c o t : TIP
+- C-c o i : IMPORTANT
+- C-c o g : DANGER
+- C-c o d : DIARY avec timestamp automatique
+- C-c o o : Callout interactif
+
+** Repliage/dépliage
+- C-c o f : Toggle fold (replier/déplier le callout courant)
+- C-c o F : Fold all (replier tous les callouts)
+- C-c o u : Unfold all (déplier tous les callouts)
+
+** Délimitation automatique
+Les callouts s'étendent jusqu'à :
+- Une ligne vide
+- Un nouveau callout
+- Un nouveau heading (titre Org)
+- La fin du buffer

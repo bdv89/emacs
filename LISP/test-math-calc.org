@@ -1,0 +1,22 @@
+#+TITLE: Test Math Calculator
+
+* Tests des corrections
+
+** Test 1: Conversion d'unités
+10 cm = mm
+
+** Test 2: Expressions simples
+5x3
+5*3  
+5 x 3
+5 × 3
+
+** Test 3: Expressions avec virgules
+2,3 + 7
+2.3 + 7
+
+** Test 4: Multiplication d'unités
+5 cm * 3 cm
+
+** Test 5: Addition d'unités
+5 cm + 30 mm

@@ -1,0 +1,128 @@
+#+TITLE: Test de l'option :only-contents avec org-transclusion
+#+DATE: 2025-07-14
+
+* Exemple source pour transclusion
+
+** Section A : Concepts de base
+Cette section explique les concepts fondamentaux.
+
+*** Sous-section A1 : Définitions
+Voici les définitions importantes :
+- Transclusion : inclusion dynamique de contenu
+- Org-roam : système de gestion de notes liées
+- PKM : Personal Knowledge Management
+
+*** Sous-section A2 : Exemples pratiques
+Voici quelques exemples d'utilisation :
+1. Inclusion de notes
+2. Références croisées
+3. Documentation modulaire
+
+** Section B : Configuration avancée
+Cette section détaille les options avancées.
+
+Configuration recommandée :
+#+begin_src emacs-lisp
+(use-package org-transclusion
+  :config
+  (setq org-transclusion-activate-persistent-message t))
+#+end_src
+
+* Démonstration des différences
+
+** Transclusion SANS :only-contents
+Voici ce que vous obtiendrez en utilisant :
+#+begin_example
+#+transclude: [[file:test-only-contents.org::*Section A : Concepts de base]]
+#+end_example
+
+La section complète avec le titre "Section A : Concepts de base" sera incluse.
+
+** Transclusion AVEC :only-contents
+Voici ce que vous obtiendrez en utilisant :
+#+begin_example
+#+transclude: [[file:test-only-contents.org::*Section A : Concepts de base]] :only-contents
+#+end_example
+
+Seul le CONTENU de la section sera inclus, sans le titre principal.
+
+* Cas d'usage pratiques
+
+** Intégration dans des documents
+L'option :only-contents est particulièrement utile pour :
+1. Intégrer du contenu sans dupliquer les titres
+2. Créer des documents compilés à partir de plusieurs sources
+3. Maintenir une hiérarchie cohérente dans le document de destination
+
+** Exemple avec notes org-roam
+#+begin_example
+#+transclude: [[id:mon-node-id]] :only-contents
+#+end_example
+
+Cette syntaxe inclut le contenu d'une note org-roam sans son titre.
+
+* Comparaison visuelle
+
+** Résultat SANS :only-contents
+```
+** Section A : Concepts de base
+Cette section explique les concepts fondamentaux.
+
+*** Sous-section A1 : Définitions
+Voici les définitions importantes :
+- Transclusion : inclusion dynamique de contenu
+- Org-roam : système de gestion de notes liées
+- PKM : Personal Knowledge Management
+
+*** Sous-section A2 : Exemples pratiques
+Voici quelques exemples d'utilisation :
+1. Inclusion de notes
+2. Références croisées
+3. Documentation modulaire
+```
+
+** Résultat AVEC :only-contents
+```
+Cette section explique les concepts fondamentaux.
+
+*** Sous-section A1 : Définitions
+Voici les définitions importantes :
+- Transclusion : inclusion dynamique de contenu
+- Org-roam : système de gestion de notes liées
+- PKM : Personal Knowledge Management
+
+*** Sous-section A2 : Exemples pratiques
+Voici quelques exemples d'utilisation :
+1. Inclusion de notes
+2. Références croisées
+3. Documentation modulaire
+```
+
+* Recommandations d'utilisation
+
+** Utiliser :only-contents quand :
+- Vous voulez éviter la duplication de titres
+- Vous intégrez du contenu dans une hiérarchie existante
+- Vous créez des documents compilés à partir de plusieurs sources
+- Vous voulez une intégration "transparente" du contenu
+
+** NE PAS utiliser :only-contents quand :
+- Vous voulez préserver la structure originale complète
+- Les titres sont importants pour la compréhension
+- Vous créez des références ou des index
+- Vous voulez maintenir la traçabilité de la source
+
+* Instructions de test
+
+Pour tester ces exemples :
+
+1. Activez org-transclusion-mode : `C-c t m`
+2. Créez un nouveau fichier org
+3. Ajoutez les lignes de transclusion exemples
+4. Observez les différences de rendu
+
+** Raccourcis utiles (selon votre configuration)
+- `C-c t m` : Toggle org-transclusion-mode
+- `C-c t r` : Refresh toutes les transclusions
+- `C-c t i` : Info sur l'état des transclusions
+- `C-c t a` : Ajouter une transclusion (template)

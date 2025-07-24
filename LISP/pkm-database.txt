@@ -1,0 +1,491 @@
+;;; pkm-database.el --- PKM Database with Timeline and Multi-Interface Search -*- lexical-binding: t; -*-
+
+;; Author: Your Name
+;; Version: 1.0
+;; Package-Requires: ((emacs "28.1") (org-ql "0.8") (org-super-agenda "1.3"))
+;; Keywords: pkm, database, timeline, search, org
+
+;;; Commentary:
+;; Système de base de données PKM avec :
+;; - Capture automatique avec extraction de métadonnées
+;; - Timeline dynamique
+;; - 3 interfaces : liste, timeline, graphe
+;; - Recherche par tags, dates, contenu
+;; - Support milliers d'entrées avec cache simple
+
+;;; Code:
+
+(require 'org)
+(require 'org-ql)
+(require 'org-super-agenda)
+(require 'json)
+
+;; --------------------------------------------------
+;; Configuration
+;; --------------------------------------------------
+(defgroup pkm-database nil
+  "PKM Database configuration."
+  :group 'org
+  :prefix "pkm-db-")
+
+(defcustom pkm-db-directory
+  (expand-file-name "pkm-database" "~/00_PKM/")
+  "Répertoire pour la base de données PKM."
+  :type 'directory
+  :group 'pkm-database)
+
+(defcustom pkm-db-cache-file
+  (expand-file-name "pkm-cache.json" pkm-db-directory)
+  "Fichier JSON pour le cache de performance."
+  :type 'file
+  :group 'pkm-database)
+
+(defcustom pkm-db-auto-extract-metadata t
+  "Extraire automatiquement les métadonnées lors de la capture."
+  :type 'boolean
+  :group 'pkm-database)
+
+;; --------------------------------------------------
+;; Variables internes
+;; --------------------------------------------------
+(defvar pkm-db--cache nil
+  "Cache en mémoire pour les métadonnées.")
+
+(defvar pkm-db--last-search-results nil
+  "Derniers résultats de recherche pour navigation rapide.")
+
+;; --------------------------------------------------
+;; Cache simple JSON
+;; --------------------------------------------------
+(defun pkm-db--init-cache ()
+  "Initialise le cache PKM."
+  (unless (file-directory-p pkm-db-directory)
+    (make-directory pkm-db-directory t))
+  
+  (setq pkm-db--cache 
+        (if (file-exists-p pkm-db-cache-file)
+            (with-temp-buffer
+              (insert-file-contents pkm-db-cache-file)
+              (condition-case nil
+                  (json-parse-buffer :object-type 'hash-table :array-type 'list)
+                (error (make-hash-table :test 'equal))))
+          (make-hash-table :test 'equal))))
+
+(defun pkm-db--save-cache ()
+  "Sauvegarde le cache."
+  (when pkm-db--cache
+    (with-temp-file pkm-db-cache-file
+      (insert (json-encode pkm-db--cache)))))
+
+(defun pkm-db--add-to-cache (file-path metadata)
+  "Ajoute une entrée au cache."
+  (unless pkm-db--cache (pkm-db--init-cache))
+  (puthash file-path metadata pkm-db--cache)
+  (pkm-db--save-cache))
+
+;; --------------------------------------------------
+;; Extraction de métadonnées
+;; --------------------------------------------------
+(defun pkm-db--extract-metadata-from-content (content &optional source-url)
+  "Extrait les métadonnées du CONTENT avec SOURCE-URL optionnel."
+  (let ((metadata (make-hash-table :test 'equal)))
+    
+    ;; Extraire le titre (première ligne ou H1)
+    (puthash "title" 
+             (or (when (string-match "^#\\+TITLE:\\s-*\\(.*\\)" content)
+                   (match-string 1 content))
+                 (when (string-match "^#\\s-*\\(.*\\)" content)
+                   (match-string 1 content))
+                 (when (string-match "^\\*\\s-*\\(.*\\)" content)
+                   (match-string 1 content))
+                 "Sans titre")
+             metadata)
+    
+    ;; Extraire les tags
+    (let ((tags '()))
+      ;; Tags style org #+TAGS:
+      (when (string-match "^#\\+TAGS:\\s-*\\(.*\\)" content)
+        (setq tags (append tags (split-string (match-string 1 content) "\\s-+" t))))
+      ;; Tags style markdown
+      (while (string-match "#\\([a-zA-Z0-9_-]+\\)" content)
+        (push (match-string 1 content) tags)
+        (setq content (replace-match "" nil nil content)))
+      (puthash "tags" (string-join (delete-dups tags) ",") metadata))
+    
+    ;; Extraire la date d'événement
+    (puthash "event-date"
+             (or (when (string-match "^#\\+DATE:\\s-*\\([0-9-]+\\)" content)
+                   (match-string 1 content))
+                 (when (string-match "\\[\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)" content)
+                   (match-string 1 content))
+                 (format-time-string "%Y-%m-%d"))
+             metadata)
+    
+    ;; Déterminer le type de source
+    (puthash "source-type"
+             (cond
+              (source-url "web")
+              ((string-match-p "\\.pdf" (or source-url "")) "pdf")
+              ((string-match-p "personnel\\|note\\|idée" content) "note")
+              ((string-match-p "article\\|recherche" content) "article")
+              (t "document"))
+             metadata)
+    
+    ;; URL source
+    (when source-url
+      (puthash "source-url" source-url metadata))
+    
+    ;; Importance (basée sur mots-clés)
+    (puthash "importance"
+             (cond
+              ((string-match-p "urgent\\|important\\|critique" content) "high")
+              ((string-match-p "projet\\|travail" content) "medium")
+              (t "low"))
+             metadata)
+    
+    metadata))
+
+;; --------------------------------------------------
+;; Templates de capture
+;; --------------------------------------------------
+(defun pkm-db--setup-capture-templates ()
+  "Configure les templates de capture PKM."
+  (add-to-list 'org-capture-templates
+    '("p" "PKM Entry" entry
+      (file+headline pkm-db--get-current-month-file "Entries")
+      "* %^{Titre}\n:PROPERTIES:\n:EVENT_DATE: %^{Date événement|%Y-%m-%d}\n:SOURCE_TYPE: %^{Type|note|article|web|pdf|document}\n:SOURCE_URL: %^{URL source}\n:TAGS: %^{Tags}\n:IMPORTANCE: %^{Importance|medium|high|low}\n:CREATED: %U\n:END:\n\n%?"
+      :after-finalize 'pkm-db--index-new-entry))
+  
+  (add-to-list 'org-capture-templates
+    '("w" "PKM Web Article" entry
+      (file+headline pkm-db--get-current-month-file "Web Articles")
+      "* %(pkm-db--extract-web-title)\n:PROPERTIES:\n:EVENT_DATE: %Y-%m-%d\n:SOURCE_TYPE: web\n:SOURCE_URL: %^{URL}\n:TAGS: %(pkm-db--extract-web-tags)\n:IMPORTANCE: medium\n:CREATED: %U\n:END:\n\n%?"
+      :after-finalize 'pkm-db--index-new-entry)))
+
+(defun pkm-db--get-current-month-file ()
+  "Retourne le fichier du mois courant."
+  (let ((filename (format "pkm-%s.org" (format-time-string "%Y-%m"))))
+    (expand-file-name filename pkm-db-directory)))
+
+(defun pkm-db--extract-web-title ()
+  "Extrait le titre d'une page web depuis le clipboard."
+  (let ((url (current-kill 0)))
+    (if (string-match-p "^https?://" url)
+        (or (pkm-db--fetch-web-title url) "Article Web")
+      "Article Web")))
+
+(defun pkm-db--extract-web-tags ()
+  "Extrait des tags automatiques basés sur l'URL."
+  (let ((url (current-kill 0)))
+    (cond
+     ((string-match-p "github\\|gitlab" url) "tech,dev")
+     ((string-match-p "arxiv\\|scholar" url) "research,academic")
+     ((string-match-p "youtube\\|vimeo" url) "video,media")
+     ((string-match-p "wikipedia" url) "reference,wiki")
+     (t "web"))))
+
+;; --------------------------------------------------
+;; Indexation
+;; --------------------------------------------------
+(defun pkm-db--index-new-entry ()
+  "Index la nouvelle entrée dans le cache."
+  (when pkm-db-auto-extract-metadata
+    (save-excursion
+      (org-back-to-heading t)
+      (let* ((entry-info (pkm-db--extract-entry-info))
+             (file-path (buffer-file-name))
+             (metadata (make-hash-table :test 'equal)))
+        
+        ;; Construire les métadonnées
+        (puthash "title" (gethash :title entry-info) metadata)
+        (puthash "event-date" (gethash :event-date entry-info) metadata)
+        (puthash "tags" (gethash :tags entry-info) metadata)
+        (puthash "source-type" (gethash :source-type entry-info) metadata)
+        (puthash "source-url" (gethash :source-url entry-info) metadata)
+        (puthash "importance" (gethash :importance entry-info) metadata)
+        (puthash "created-date" (format-time-string "%Y-%m-%d %H:%M:%S") metadata)
+        (puthash "last-modified" (format-time-string "%Y-%m-%d %H:%M:%S") metadata)
+        
+        ;; Ajouter au cache
+        (pkm-db--add-to-cache file-path metadata)))))
+
+(defun pkm-db--extract-entry-info ()
+  "Extrait les informations de l'entrée courante."
+  (let ((info (make-hash-table :test 'equal)))
+    ;; Titre
+    (puthash :title (nth 4 (org-heading-components)) info)
+    
+    ;; Propriétés
+    (puthash :event-date (or (org-entry-get nil "EVENT_DATE") 
+                            (format-time-string "%Y-%m-%d")) info)
+    (puthash :tags (or (org-entry-get nil "TAGS") "") info)
+    (puthash :source-type (or (org-entry-get nil "SOURCE_TYPE") "note") info)
+    (puthash :source-url (or (org-entry-get nil "SOURCE_URL") "") info)
+    (puthash :importance (or (org-entry-get nil "IMPORTANCE") "medium") info)
+    
+    ;; Contenu
+    (puthash :content (buffer-substring-no-properties 
+                      (org-entry-beginning-position)
+                      (org-entry-end-position)) info)
+    
+    info))
+
+;; --------------------------------------------------
+;; Interfaces de recherche
+;; --------------------------------------------------
+(defun pkm-db-search-interface ()
+  "Interface de recherche principale avec org-ql."
+  (interactive)
+  (let* ((search-terms (read-string "Recherche PKM (tags:web date:2024 content:emacs): "))
+         (query (pkm-db--parse-search-terms search-terms)))
+    
+    (setq pkm-db--last-search-results
+          (org-ql-search 
+            (pkm-db--get-all-files)
+            query
+            :title (format "PKM Search: %s" search-terms)
+            :sort '(date reverse priority)
+            :super-groups 
+            '((:name "Cette semaine" 
+               :deadline (before ,(format-time-string "%Y-%m-%d" (time-add (current-time) (* 7 24 3600)))))
+              (:name "Articles Web" 
+               :property "SOURCE_TYPE" "web")
+              (:name "Notes personnelles" 
+               :property "SOURCE_TYPE" "note")
+              (:name "Documents" 
+               :property "SOURCE_TYPE" "document")
+              (:auto-property "IMPORTANCE")
+              (:auto-tags t))))))
+
+(defun pkm-db--parse-search-terms (terms)
+  "Parse les termes de recherche en requête org-ql."
+  (let ((conditions '())
+        (remaining terms))
+    
+    ;; Parser tags:
+    (while (string-match "tags:\\([a-zA-Z0-9,_-]+\\)" remaining)
+      (let ((tags (split-string (match-string 1 remaining) "," t)))
+        (push `(tags ,@tags) conditions))
+      (setq remaining (replace-match "" nil nil remaining)))
+    
+    ;; Parser date:
+    (while (string-match "date:\\([0-9-]+\\)" remaining)
+      (push `(property "EVENT_DATE" ,(match-string 1 remaining)) conditions)
+      (setq remaining (replace-match "" nil nil remaining)))
+    
+    ;; Parser content: (recherche dans le texte)
+    (while (string-match "content:\\([a-zA-Z0-9_-]+\\)" remaining)
+      (push `(regexp ,(match-string 1 remaining)) conditions)
+      (setq remaining (replace-match "" nil nil remaining)))
+    
+    ;; Ajouter recherche libre sur le reste
+    (let ((free-text (string-trim remaining)))
+      (when (> (length free-text) 0)
+        (push `(regexp ,free-text) conditions)))
+    
+    ;; Construire la requête finale
+    (if (> (length conditions) 1)
+        `(and ,@(reverse conditions))
+      (or (car conditions) '(regexp ".")))))
+
+;; --------------------------------------------------
+;; Interface Timeline
+;; --------------------------------------------------
+(defun pkm-db-timeline-view ()
+  "Affiche une timeline des entrées PKM."
+  (interactive)
+  (org-ql-search 
+    (pkm-db--get-all-files)
+    '(property "EVENT_DATE")
+    :title "PKM Timeline"
+    :sort '(date)
+    :super-groups 
+    '((:auto-ts t :time-grid nil)
+      (:name "Cette année" 
+       :property "EVENT_DATE" 
+       :regexp ,(format-time-string "%Y"))
+      (:name "Année précédente" 
+       :property "EVENT_DATE" 
+       :regexp ,(format-time-string "%Y" (time-subtract (current-time) (* 365 24 3600))))
+      (:name "Plus ancien" 
+       :anything t))))
+
+;; --------------------------------------------------
+;; Interface Graphe (intégration org-roam)
+;; --------------------------------------------------
+(defun pkm-db-graph-view ()
+  "Ouvre la vue graphe des connexions PKM."
+  (interactive)
+  (if (featurep 'org-roam-ui)
+      (org-roam-ui-open)
+    (message "org-roam-ui requis pour la vue graphe")))
+
+;; --------------------------------------------------
+;; Recherche par facettes
+;; --------------------------------------------------
+(defun pkm-db-faceted-search ()
+  "Recherche par facettes avec filtres dynamiques."
+  (interactive)
+  (let* ((source-types (pkm-db--get-unique-values "SOURCE_TYPE"))
+         (importance-levels (pkm-db--get-unique-values "IMPORTANCE"))
+         (years (pkm-db--get-unique-years))
+         
+         (selected-type (completing-read "Type de source: " 
+                                       (cons "Tous" source-types) nil t))
+         (selected-importance (completing-read "Importance: " 
+                                             (cons "Tous" importance-levels) nil t))
+         (selected-year (completing-read "Année: " 
+                                       (cons "Toutes" years) nil t)))
+    
+    (let ((conditions '()))
+      (unless (string= selected-type "Tous")
+        (push `(property "SOURCE_TYPE" ,selected-type) conditions))
+      (unless (string= selected-importance "Tous")
+        (push `(property "IMPORTANCE" ,selected-importance) conditions))
+      (unless (string= selected-year "Toutes")
+        (push `(property "EVENT_DATE" :regexp ,selected-year) conditions))
+      
+      (org-ql-search 
+        (pkm-db--get-all-files)
+        (if conditions 
+            `(and ,@conditions)
+          '(regexp "."))
+        :title (format "PKM Filtered: %s / %s / %s" 
+                      selected-type selected-importance selected-year)
+        :sort '(date reverse)
+        :super-groups '((:auto-property "SOURCE_TYPE"))))))
+
+;; --------------------------------------------------
+;; Fonctions utilitaires
+;; --------------------------------------------------
+(defun pkm-db--get-all-files ()
+  "Retourne tous les fichiers PKM."
+  (directory-files-recursively pkm-db-directory "\\.org$"))
+
+(defun pkm-db--get-unique-values (property)
+  "Retourne les valeurs uniques d'une propriété depuis le cache."
+  (pkm-db--init-cache)
+  (let ((values '()))
+    (maphash (lambda (file metadata)
+               (when-let ((value (gethash property metadata)))
+                 (unless (string-empty-p value)
+                   (push value values))))
+             pkm-db--cache)
+    (delete-dups values)))
+
+(defun pkm-db--get-unique-years ()
+  "Retourne les années uniques des dates d'événement."
+  (pkm-db--init-cache)
+  (let ((years '()))
+    (maphash (lambda (file metadata)
+               (when-let ((date (gethash "event-date" metadata)))
+                 (when (>= (length date) 4)
+                   (push (substring date 0 4) years))))
+             pkm-db--cache)
+    (delete-dups years)))
+
+(defun pkm-db--fetch-web-title (url)
+  "Extrait le titre d'une page web."
+  (condition-case nil
+      (with-temp-buffer
+        (url-insert-file-contents url)
+        (when (re-search-forward "<title>\\([^<]+\\)</title>" nil t)
+          (match-string 1)))
+    (error nil)))
+
+;; --------------------------------------------------
+;; Statistiques et maintenance
+;; --------------------------------------------------
+(defun pkm-db-statistics ()
+  "Affiche les statistiques de la base PKM."
+  (interactive)
+  (pkm-db--init-cache)
+  
+  (let ((total-entries 0)
+        (by-type (make-hash-table :test 'equal))
+        (by-importance (make-hash-table :test 'equal))
+        (by-year (make-hash-table :test 'equal)))
+    
+    ;; Parcourir le cache
+    (maphash (lambda (file metadata)
+               (setq total-entries (1+ total-entries))
+               
+               ;; Compter par type
+               (let ((type (or (gethash "source-type" metadata) "unknown")))
+                 (puthash type (1+ (gethash type by-type 0)) by-type))
+               
+               ;; Compter par importance
+               (let ((importance (or (gethash "importance" metadata) "unknown")))
+                 (puthash importance (1+ (gethash importance by-importance 0)) by-importance))
+               
+               ;; Compter par année
+               (let ((date (gethash "event-date" metadata)))
+                 (when (and date (>= (length date) 4))
+                   (let ((year (substring date 0 4)))
+                     (puthash year (1+ (gethash year by-year 0)) by-year)))))
+             pkm-db--cache)
+    
+    (with-current-buffer (get-buffer-create "*PKM Statistics*")
+      (erase-buffer)
+      (insert "=== STATISTIQUES PKM DATABASE ===\n\n")
+      (insert (format "Total entrées: %d\n\n" total-entries))
+      
+      (insert "=== PAR TYPE ===\n")
+      (maphash (lambda (type count)
+                 (insert (format "%-15s: %d\n" type count)))
+               by-type)
+      
+      (insert "\n=== PAR IMPORTANCE ===\n")
+      (maphash (lambda (importance count)
+                 (insert (format "%-15s: %d\n" importance count)))
+               by-importance)
+      
+      (insert "\n=== PAR ANNÉE ===\n")
+      (maphash (lambda (year count)
+                 (insert (format "%-15s: %d\n" year count)))
+               by-year)
+      
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
+
+;; --------------------------------------------------
+;; Raccourcis clavier
+;; --------------------------------------------------
+(defun pkm-db-setup-keybindings ()
+  "Configure les raccourcis PKM Database."
+  (global-set-key (kbd "C-c b s") #'pkm-db-search-interface)
+  (global-set-key (kbd "C-c b t") #'pkm-db-timeline-view)
+  (global-set-key (kbd "C-c b g") #'pkm-db-graph-view)
+  (global-set-key (kbd "C-c b f") #'pkm-db-faceted-search)
+  (global-set-key (kbd "C-c b i") #'pkm-db-statistics)
+  
+  ;; Capture templates
+  (global-set-key (kbd "C-c b p") (lambda () (interactive) (org-capture nil "p")))
+  (global-set-key (kbd "C-c b w") (lambda () (interactive) (org-capture nil "w"))))
+
+;; --------------------------------------------------
+;; Initialisation
+;; --------------------------------------------------
+;;;###autoload
+(defun pkm-database-setup ()
+  "Configure le système PKM Database."
+  (interactive)
+  (pkm-db--init-cache)
+  (pkm-db--setup-capture-templates)
+  (pkm-db-setup-keybindings)
+  
+  ;; Activer org-super-agenda
+  (org-super-agenda-mode 1)
+  
+  (message "✓ PKM Database configuré")
+  (message "  🔍 C-c p s : Recherche | C-c p t : Timeline | C-c p g : Graphe")
+  (message "  📊 C-c p f : Recherche facettes | C-c p i : Statistiques")
+  (message "  📝 C-c p p : Capture entrée | C-c p w : Capture web"))
+
+;; Auto-setup si les dépendances sont disponibles
+(with-eval-after-load 'org-ql
+  (with-eval-after-load 'org-super-agenda
+    (pkm-database-setup)))
+
+(provide 'pkm-database)
+;;; pkm-database.el ends here
